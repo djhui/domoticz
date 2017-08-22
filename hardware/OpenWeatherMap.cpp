@@ -12,7 +12,7 @@
 #include "../main/SQLHelper.h"
 
 #ifdef _DEBUG
-	//	#define DEBUG_OPENWEATHERMAP
+	//#define DEBUG_OPENWEATHERMAP
 	//#define DEBUG_OPENWEATHERMAP_WRITE
 #endif
 
@@ -54,23 +54,21 @@ COpenWeatherMap::COpenWeatherMap(const int ID, const std::string &APIKey, const 
 	m_Location(Location),
 	m_Language("en")
 {
-	_log.Log(LOG_STATUS, "OpenWeatherMap: Create instance");
 	m_HwdID=ID;
 	m_stoprequested=false;
+
+	m_bHaveGPSCoordinated = (Location.find("lat=") != std::string::npos);
+
 
 	std::string sValue;
 	if (m_sql.GetPreferencesVar("Language", sValue))
 	{
 		m_Language = sValue;
-#ifdef DEBUG_OPENWEATHERMAP
-		_log.Log(LOG_STATUS, "OpenWeatherMap: Language set to %s", sValue.c_str());
-#endif
 	}
 }
 
 COpenWeatherMap::~COpenWeatherMap(void)
 {
-	_log.Log(LOG_STATUS, "OpenWeatherMap: Destroy instance");
 }
 
 bool COpenWeatherMap::StartHardware()
@@ -78,6 +76,7 @@ bool COpenWeatherMap::StartHardware()
 	m_thread = boost::shared_ptr<boost::thread>(new boost::thread(boost::bind(&COpenWeatherMap::Do_Work, this)));
 	m_bIsStarted=true;
 	sOnConnected(this);
+	_log.Log(LOG_STATUS, "OpenWeatherMap: Started");
 	return (m_thread!=NULL);
 }
 
@@ -90,7 +89,7 @@ bool COpenWeatherMap::StopHardware()
 		m_thread->join();
 	}
     m_bIsStarted=false;
-    return true;
+	return true;
 }
 
 void COpenWeatherMap::Do_Work()
@@ -133,8 +132,11 @@ void COpenWeatherMap::GetMeterDetails()
 	std::string sResult;
 	std::stringstream sURL;
 
-	sURL << "http://api.openweathermap.org/data/2.5/weather?" << m_Location << "&APPID=" << m_APIKey << "&units=metric" << "&lang=" << m_Language;
-	
+	sURL << "http://api.openweathermap.org/data/2.5/weather?";
+	if (!m_bHaveGPSCoordinated)
+		sURL << "q=";
+	sURL << m_Location << "&APPID=" << m_APIKey << "&units=metric" << "&lang=" << m_Language;
+
 #ifdef DEBUG_OPENWEATHERMAP
 	_log.Log(LOG_STATUS, "OpenWeatherMap: Get data from %s", sURL);
 #endif
@@ -159,15 +161,12 @@ void COpenWeatherMap::GetMeterDetails()
 #ifdef DEBUG_OPENWEATHERMAP_WRITE
 	SaveString2Disk(sResult, "E:\\OpenWeatherMap.json");
 #endif
-#ifdef DEBUG_OPENWEATHERMAP
-	_log.Log(LOG_STATUS, "OpenWeatherMap: Parsing json");
-#endif
 
 	Json::Value root;
 
 	Json::Reader jReader;
 	bool ret=jReader.parse(sResult,root);
-	if (!ret)
+	if ((!ret) || (!root.isObject()))
 	{
 		_log.Log(LOG_ERROR,"OpenWeatherMap: Invalid data received!");
 		return;
@@ -183,21 +182,20 @@ void COpenWeatherMap::GetMeterDetails()
 		_log.Log(LOG_ERROR, "OpenWeatherMap: Invalid data received!");
 		return;
 	}
-
-	if (root["cod"].asInt() != 200)
+	std::string rcod = root["cod"].asString();
+	if (atoi(rcod.c_str()) != 200)
 	{
-		_log.Log(LOG_ERROR, "OpenWeatherMap: Invalid data ('cod') received!");
+		_log.Log(LOG_ERROR, "OpenWeatherMap: Error received: %s (%s)",rcod.c_str(), root["message"].asString().c_str());
 		return;
 	}
 
-	float temp=-999.9f;
-	int humidity=0;
-	int barometric=0;
-	int barometric_forcast=baroForecastNoInfo;
+	float temp =- 999.9f;
+	int humidity = 0;
+	int barometric = 0;
+	int barometric_forecast = baroForecastNoInfo;
 
 	if (!root["main"].empty())
 	{
-
 		if (!root["main"]["temp"].empty())
 		{
 			temp = root["main"]["temp"].asFloat();
@@ -211,18 +209,36 @@ void COpenWeatherMap::GetMeterDetails()
 		{
 			barometric = atoi(root["main"]["pressure"].asString().c_str());
 			if (barometric < 1000)
-				barometric_forcast = baroForecastRain;
+				barometric_forecast = baroForecastRain;
 			else if (barometric < 1020)
-				barometric_forcast = baroForecastCloudy;
+				barometric_forecast = baroForecastCloudy;
 			else if (barometric < 1030)
-				barometric_forcast = baroForecastPartlyCloudy;
+				barometric_forecast = baroForecastPartlyCloudy;
 			else
-				barometric_forcast = baroForecastSunny;
-		}
+				barometric_forecast = baroForecastSunny;
 
+			if (!root["weather"].empty())
+			{
+				if (!root["weather"][0].empty())
+				{
+					if (!root["weather"][0]["id"].empty())
+					{
+						int condition = root["weather"][0]["id"].asInt();
+						if ((condition == 801) || (condition == 802))
+							barometric_forecast = baroForecastPartlyCloudy;
+						else if (condition == 803)
+							barometric_forecast = baroForecastCloudy;
+						else if ((condition == 800))
+							barometric_forecast = baroForecastSunny;
+						else if ((condition >= 300) && (condition < 700))
+							barometric_forecast = baroForecastRain;
+					}
+				}
+			}
+		}
 		if ((temp != -999.9f) && (humidity != 0) && (barometric != 0))
 		{
-			SendTempHumBaroSensor(1, 255, temp, humidity, static_cast<float>(barometric), barometric_forcast, "THB");
+			SendTempHumBaroSensor(1, 255, temp, humidity, static_cast<float>(barometric), barometric_forecast, "THB");
 		}
 		else if ((temp != -999.9f) && (humidity != 0))
 		{
@@ -230,7 +246,7 @@ void COpenWeatherMap::GetMeterDetails()
 		}
 		else
 		{
-			if (temp!=-999.9f)
+			if (temp != -999.9f)
 				SendTempSensor(1, 255, temp, "Temperature");
 			if (humidity != 0)
 				SendHumiditySensor(1, 255, humidity, "Humidity");

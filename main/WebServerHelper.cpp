@@ -34,6 +34,7 @@ namespace http {
 			plainServer_.reset(new CWebServer());
 			serverCollection.push_back(plainServer_);
 			bRet |= plainServer_->StartServer(web_settings, serverpath, bIgnoreUsernamePassword);
+			our_listener_port = web_settings.listening_port;
 #ifdef WWW_ENABLE_SSL
 			if (secure_web_settings.is_enabled()) {
 				SSL_library_init();
@@ -140,16 +141,18 @@ namespace http {
 			const std::string &planID,
 			const std::string &floorID,
 			const bool bDisplayHidden,
+			const bool bDisplayDisabled,
 			const bool bFetchFavorites,
 			const time_t LastUpdate,
-			const std::string &username)
+			const std::string &username,
+			const std::string &hardwareid) // OTO
 		{
 			if (plainServer_) { // assert
-				plainServer_->GetJSonDevices(root, rused, rfilter, order, rowid, planID, floorID, bDisplayHidden, bFetchFavorites, LastUpdate, username);
+				plainServer_->GetJSonDevices(root, rused, rfilter, order, rowid, planID, floorID, bDisplayHidden, bDisplayDisabled, bFetchFavorites, LastUpdate, username, hardwareid);
 			}
 #ifdef WWW_ENABLE_SSL
 			else if (secureServer_) {
-				secureServer_->GetJSonDevices(root, rused, rfilter, order, rowid, planID, floorID, bDisplayHidden, bFetchFavorites, LastUpdate, username);
+				secureServer_->GetJSonDevices(root, rused, rfilter, order, rowid, planID, floorID, bDisplayHidden, bDisplayDisabled, bFetchFavorites, LastUpdate, username, hardwareid);
 			}
 #endif
 		}
